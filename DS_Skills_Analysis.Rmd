@@ -1,0 +1,207 @@
+---
+title: "Most Valued Data Science Skills Analysis"
+author: "Stefan Huber, primary code. Zahid Chowdhury secondary code. Tyler Graham & Daniel DeBonis, data sourcing.Tyler Graham, ER diagram. Group call, logic model"
+date: "2025-03-22"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+## Introduction
+
+This analysis explores the question: "Which are the most valued data science skills?" As W. Edwards Deming said, "In God we trust, all others must bring data." We will use data from two datasets to answer this question:
+
+1. Data Science Jobs dataset from GitHub
+2. Job Skills dataset from GitHub
+
+The analysis includes data acquisition, tidying, transformation, exploratory data analysis, and storage in a relational database.
+
+## Data Acquisition
+
+We begin by loading necessary libraries and downloading the datasets from GitHub.
+
+```{r load-libraries}
+# Load required libraries
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(DBI)
+library(RSQLite)
+```
+
+```{r data-acquisition}
+# Download datasets from GitHub
+# Data set 1: Data Science Jobs
+jobs_url <- "https://raw.githubusercontent.com/zahid607/Project-3/main/Data%20Science_Jobs%20.csv"
+jobs <- read.csv(jobs_url, stringsAsFactors = FALSE)
+
+# Data set 2: Job Skills
+skills_url <- "https://raw.githubusercontent.com/tcgraham-data/data-607-project-3/main/job_skills.csv"  
+job_skills <- read.csv(skills_url, stringsAsFactors = FALSE)
+
+# Display the structure of both datasets
+str(jobs)
+str(job_skills)
+
+# Display the first few rows of each dataset
+head(jobs)
+head(job_skills)
+```
+
+## Data Tidying and Transformation
+
+In this section, we clean and transform the data to prepare it for analysis. We create normalized tables for a relational database structure.
+
+```{r data-tidying}
+# Transform the job_skills dataset
+# Split comma-separated skills into individual rows
+job_skills_expanded <- job_skills %>%
+  separate_rows(job_skills, sep = ",") %>%
+  mutate(job_skills = trimws(job_skills))
+
+# Create a master table for skills
+skills_master <- job_skills_expanded %>%
+  distinct(job_skills) %>%
+  mutate(skill_id = row_number())
+
+# Create a linking table between jobs and skills
+job_skill_linking <- job_skills_expanded %>%
+  left_join(skills_master, by = "job_skills") %>%
+  select(job_link, skill_id)
+
+# Display the first few rows of the transformed tables
+head(job_skills_expanded)
+head(skills_master)
+head(job_skill_linking)
+```
+
+## Exploratory Data Analysis
+
+Now we analyze the data to identify the most valued data science skills based on their frequency in job postings.
+
+```{r exploratory-analysis}
+# Count skill frequency
+skill_frequency <- job_skill_linking %>%
+  group_by(skill_id) %>%
+  summarise(count = n()) %>%
+  arrange(desc(count)) %>%
+  left_join(skills_master, by = "skill_id")
+
+# Display top 20 skills by frequency
+print("Top 20 most frequent skills:")
+head(skill_frequency, 20)
+
+# Calculate basic statistics
+skill_stats <- skill_frequency %>%
+  summarise(
+    mean_count = mean(count),
+    median_count = median(count),
+    sd_count = sd(count),
+    min_count = min(count),
+    max_count = max(count)
+  )
+
+print("Skill frequency statistics:")
+skill_stats
+
+# Identify potential outliers (skills that are mentioned significantly more often)
+outlier_threshold <- skill_stats$mean_count + 2 * skill_stats$sd_count
+outlier_skills <- skill_frequency %>%
+  filter(count > outlier_threshold)
+
+print("Skills that appear significantly more often (potential outliers):")
+outlier_skills
+```
+
+```{r visualization}
+# Create a bar chart for the top skills with annotations  
+top_10_skills <- skill_frequency %>%  
+  head(10)  
+ggplot(top_10_skills, aes(x = reorder(job_skills, count), y = count)) +  
+  geom_bar(stat = "identity", fill = "steelblue") +  
+  coord_flip() +  
+  labs(title = "Top 10 Most Frequent Data Science Skills",  
+       x = "Skill",  
+       y = "Frequency") +  
+  theme_minimal() 
+
+# Log-Transformed Histogram for skill frequency distribution  
+ggplot(skill_frequency, aes(x = log10(count + 1))) +  
+  geom_histogram(bins = 30, fill = "steelblue", alpha = 0.7) +  
+  labs(title = "Distribution of Skill Frequencies (Log Scale)",  
+       x = "Log10(Frequency + 1)",  
+       y = "Count") +  
+  theme_minimal() 
+```
+
+## Relational Database Creation
+
+We store our normalized tables in a SQLite database for better data management.
+
+```{r database-creation}
+# Create or connect to a SQLite database file
+db <- dbConnect(SQLite(), dbname = "data_science_jobs.db")
+
+# Write normalized tables to the database
+# Write the jobs table from the first dataset
+dbWriteTable(db, "jobs", jobs, overwrite = TRUE)
+
+# Write the skills master table
+dbWriteTable(db, "skills_master", skills_master, overwrite = TRUE)
+
+# Write the job-skill linking table
+dbWriteTable(db, "job_skill_linking", job_skill_linking, overwrite = TRUE)
+
+# List tables to confirm
+dbListTables(db)
+
+# Example query: Get the top 5 skills from the database
+query <- "
+SELECT sm.job_skills, COUNT(*) as frequency
+FROM job_skill_linking jsl
+JOIN skills_master sm ON jsl.skill_id = sm.skill_id
+GROUP BY sm.job_skills
+ORDER BY frequency DESC
+LIMIT 5
+"
+
+result <- dbGetQuery(db, query)
+print("Top 5 skills from database query:")
+result
+
+# Disconnect after writing
+dbDisconnect(db)
+```
+
+## Findings and Conclusion
+
+Based on our analysis, the most valued data science skills (as measured by frequency in job postings) are:
+
+1. Python
+2. SQL
+3. Communication
+4. Data Analysis
+5. Machine Learning
+
+These findings align with industry expectations, where technical skills like Python and SQL are fundamental, but soft skills like communication are also highly valued.
+
+The analysis reveals a clear hierarchy of skills, with a few skills (like Python and SQL) appearing significantly more often than others. This suggests that these are core skills that almost every data science job requires.
+
+## Methodology Notes
+
+1. **Data Collection**: Data was collected from two GitHub repositories containing job postings and associated skills.
+2. **Data Transformation**: We normalized the data into three tables: jobs, skills_master, and job_skill_linking.
+3. **Analysis Approach**: We used frequency counts as a proxy for skill value, assuming that skills mentioned more frequently in job postings are more valued.
+4. **Limitations**: This analysis does not account for the context in which skills are mentioned or their relative importance within a job posting.
+
+## Future Work
+
+Future analyses could:
+- Incorporate salary data to correlate skills with compensation
+- Analyze skill co-occurrence to identify skill clusters
+- Track skill trends over time to identify emerging skills
+- Segment analysis by job title, seniority level, or industry
+
+
